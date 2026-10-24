@@ -1,15 +1,32 @@
 services:
   dashboard:
+    # DASHBOARD_IMAGE is set by the deployment script to the published GHCR image;
+    # locally it falls back to building this directory.
+    image: ${DASHBOARD_IMAGE:-devops-dashboard:local}
     build: .
     ports:
-      - "5000:5000"
+      - "${DASHBOARD_PORT:-5000}:5000"
     environment:
-      # set to your repo (owner/name) to show live GitHub Actions runs, e.g. 24106085-wq/devops-dashboard
+      # owner/name of the repository whose GitHub Actions runs are shown, e.g. 24106085-wq/devops-dashboard
       GITHUB_REPO: ${GITHUB_REPO:-}
+      # optional; needed for private repos and to raise the API rate limit. Never commit it.
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      # true shows clearly-labelled SAMPLE runs instead of calling GitHub
+      DEMO_MODE: ${DEMO_MODE:-false}
+      GITHUB_CACHE_TTL: ${GITHUB_CACHE_TTL:-60}
+      GITHUB_TIMEOUT: ${GITHUB_TIMEOUT:-5}
       DB_PATH: /data/dashboard.db
     volumes:
       - dashboard-data:/data
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
 
 volumes:
   dashboard-data:

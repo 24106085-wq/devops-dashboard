@@ -2,15 +2,29 @@ name: DevOps Dashboard CI/CD
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
 
+# Least privilege by default; jobs that need more declare it themselves.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  PYTHON_VERSION: "3.12"
+  LOCAL_IMAGE: devops-dashboard
+
 jobs:
-  build:
-    name: Build
+  # ---------------------------------------------------------------- A
+  validate:
+    name: A - Code validation
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -18,25 +32,34 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
+          cache-dependency-path: requirements*.txt
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements-dev.txt
 
-      - name: Check that the code compiles
-        run: python -m py_compile app.py
+      - name: Compile Python sources
+        run: python -m compileall -q app.py config.py github_client.py pipeline.py test_*.py
 
-      - name: Validate Docker Compose file
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Validate Docker Compose configuration
         run: docker compose config -q
 
-      - name: Build Docker image
-        run: docker build -t devops-dashboard:${{ github.sha }} .
+      - name: Check shell scripts
+        run: bash -n docker-entrypoint.sh deploy/remote-deploy.sh scripts/docker-smoke.sh
 
+      - name: Lint workflow files (actionlint)
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.7 -color -shellcheck=
+
+  # ---------------------------------------------------------------- B
   test:
-    name: Test
+    name: B - Automated tests
     runs-on: ubuntu-latest
-    needs: build
+    needs: validate
+    timeout-minutes: 15
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -44,29 +67,118 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
+          cache-dependency-path: requirements*.txt
 
       - name: Install dependencies
-        run: pip install -r requirements.txt pytest
+        run: pip install -r requirements-dev.txt
 
-      - name: Run unit tests
-        run: pytest -v
+      - name: Run tests with coverage
+        # GitHub is mocked in the tests; make sure the runner's environment cannot leak into them.
+        env:
+          GITHUB_REPO: ""
+          GITHUB_TOKEN: ""
+          DEMO_MODE: ""
+        run: >
+          pytest -v
+          --junitxml=reports/junit.xml
+          --cov=app --cov=config --cov=github_client --cov=pipeline
+          --cov-report=term-missing
+          --cov-report=xml:reports/coverage.xml
 
-  deploy:
-    name: Deploy
+      - name: Publish test summary
+        if: always()
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import os
+          import xml.etree.ElementTree as ET
+          path = "reports/junit.xml"
+          print("### Test results")
+          if not os.path.exists(path):
+              print("No JUnit report was produced.")
+          else:
+              suite = ET.parse(path).getroot()
+              suite = suite if suite.tag == "testsuite" else suite[0]
+              keys = ("tests", "failures", "errors", "skipped")
+              print(" | ".join("%s: %s" % (k, suite.get(k)) for k in keys))
+          PY
+
+      - name: Upload test and coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: reports/
+          retention-days: 14
+
+  # ---------------------------------------------------------------- C
+  docker-build:
+    name: C - Docker build and smoke test
     runs-on: ubuntu-latest
-    needs: test
+    needs: [validate, test]
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (tagged with the commit SHA)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: ${{ env.LOCAL_IMAGE }}:${{ github.sha }}
+          outputs: type=docker,dest=${{ runner.temp }}/image.tar
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Load the built image
+        run: docker load --input "${{ runner.temp }}/image.tar"
+
+      - name: Smoke test the image (non-root, /health, SQLite persistence, no silent demo data)
+        run: scripts/docker-smoke.sh "${{ env.LOCAL_IMAGE }}:${{ github.sha }}"
+
+      # The exact image that passed the smoke test is what gets published.
+      - name: Upload tested image for publishing
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: ${{ runner.temp }}/image.tar
+          retention-days: 1
+
+  # ---------------------------------------------------------------- D
+  publish:
+    name: D - Publish image to GHCR
+    runs-on: ubuntu-latest
+    needs: docker-build
+    # Never runs for pull requests or manual runs of other branches.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    timeout-minutes: 15
     permissions:
       contents: read
       packages: write
+    outputs:
+      image: ${{ steps.ref.outputs.image }}
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
+      - name: Download tested image
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+          path: ${{ runner.temp }}
 
-      - name: Set lowercase image name
-        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+      - name: Load image
+        run: docker load --input "${{ runner.temp }}/image.tar"
+
+      - name: Compute image reference (GHCR names must be lowercase)
+        id: ref
+        run: |
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+          echo "image=$IMAGE:$GITHUB_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -75,20 +187,130 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          tags: |
-            ${{ env.IMAGE }}:latest
-            ${{ env.IMAGE }}:${{ github.sha }}
-
-      - name: Deploy container and run smoke test
+      - name: Tag and push (immutable commit-SHA tag, plus latest for main)
         run: |
-          docker run -d --name dashboard -p 5000:5000 ${{ env.IMAGE }}:latest
-          sleep 5
-          curl --fail http://localhost:5000/health
-          curl --fail http://localhost:5000/api/summary
-          docker logs dashboard
-          docker stop dashboard
+          docker tag "$LOCAL_IMAGE:$GITHUB_SHA" "$IMAGE:$GITHUB_SHA"
+          docker tag "$LOCAL_IMAGE:$GITHUB_SHA" "$IMAGE:latest"
+          docker push "$IMAGE:$GITHUB_SHA"
+          docker push "$IMAGE:latest"
+
+      - name: Summary
+        run: |
+          {
+            echo "### Image published"
+            echo "- \`$IMAGE:$GITHUB_SHA\`"
+            echo "- \`$IMAGE:latest\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------- E
+  deploy:
+    name: E - Deploy over SSH
+    runs-on: ubuntu-latest
+    needs: publish
+    # Only for trusted pushes to main, and only once the repository variable DEPLOY_ENABLED is "true".
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
+    timeout-minutes: 15
+    environment: production
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: read
+    env:
+      IMAGE_REF: ${{ needs.publish.outputs.image }}
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+      DEPLOY_HEALTH_URL: ${{ vars.DEPLOY_HEALTH_URL }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate deployment configuration
+        env:
+          HAS_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY != '' }}
+          HAS_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS != '' }}
+        run: |
+          missing=0
+          [ -n "$DEPLOY_HOST" ] || { echo "::error::Secret DEPLOY_HOST is not set"; missing=1; }
+          [ -n "$DEPLOY_USER" ] || { echo "::error::Secret DEPLOY_USER is not set"; missing=1; }
+          [ "$HAS_SSH_KEY" = "true" ] || { echo "::error::Secret DEPLOY_SSH_KEY is not set"; missing=1; }
+          [ "$HAS_KNOWN_HOSTS" = "true" ] || { echo "::error::Secret DEPLOY_KNOWN_HOSTS is not set"; missing=1; }
+          if [ "$missing" -ne 0 ]; then
+            echo "DEPLOY_ENABLED is true but the deployment is incompletely configured." >&2
+            exit 1
+          fi
+          echo "DEPLOY_PORT=${DEPLOY_PORT:-22}" >> "$GITHUB_ENV"
+          echo "DEPLOY_PATH=${DEPLOY_PATH:-/opt/devops-dashboard}" >> "$GITHUB_ENV"
+
+      - name: Configure SSH (strict host key checking)
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          cat > ~/.ssh/config <<CONFIG
+          Host deploy-target
+            HostName ${DEPLOY_HOST}
+            User ${DEPLOY_USER}
+            Port ${DEPLOY_PORT}
+            IdentityFile ~/.ssh/deploy_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            BatchMode yes
+            ConnectTimeout 15
+          CONFIG
+          chmod 600 ~/.ssh/config
+
+      - name: Copy compose file and deploy script
+        run: scp docker-compose.yml deploy/remote-deploy.sh "deploy-target:${DEPLOY_PATH}/"
+
+      - name: Let the host pull the private image (short-lived job token)
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GHCR_TOKEN" | ssh deploy-target "docker login ghcr.io -u '${GITHUB_ACTOR}' --password-stdin"
+
+      - name: Deploy, wait for health, roll back on failure
+        run: ssh deploy-target "DEPLOY_DIR='${DEPLOY_PATH}' bash '${DEPLOY_PATH}/remote-deploy.sh' '${IMAGE_REF}'"
+
+      - name: External health check
+        if: env.DEPLOY_HEALTH_URL != ''
+        run: curl -fsS --max-time 10 --retry 6 --retry-delay 5 --retry-connrefused "$DEPLOY_HEALTH_URL"
+
+      - name: Clean up credentials
+        if: always()
+        run: |
+          ssh deploy-target "docker logout ghcr.io" || true
+          rm -f ~/.ssh/deploy_key ~/.ssh/config ~/.ssh/known_hosts
+
+      - name: Summary
+        run: |
+          {
+            echo "### Deployment"
+            echo "- Deployed \`${IMAGE_REF}\` and the container reported healthy."
+            if [ -n "$DEPLOY_HEALTH_URL" ]; then
+              echo "- External health check passed."
+            else
+              echo "- External health check skipped (DEPLOY_HEALTH_URL not set)."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy-not-configured:
+    name: E - Deploy skipped (not configured)
+    runs-on: ubuntu-latest
+    needs: publish
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED != 'true'
+    steps:
+      - name: Report that nothing was deployed
+        run: |
+          echo "::notice title=Deployment not configured::Image was published to GHCR, but NO server was updated. Set the DEPLOY_ENABLED variable to enable SSH deployment."
+          {
+            echo "### Deployment not configured"
+            echo "The image was published to GHCR, but **no server was updated**."
+            echo "See README.md, section \"Optional persistent deployment\"."
+          } >> "$GITHUB_STEP_SUMMARY"

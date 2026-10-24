@@ -29,3 +29,21 @@ ASSD Mini Project (Experiment 11) - a Flask dashboard that shows:
 | PATCH/DELETE /api/tasks/<id> | Move / delete a task |
 | GET /api/pipeline | Latest GitHub Actions runs |
 | GET /api/summary | Numbers for the summary cards |
+
+## Windows troubleshooting
+
+**Python version:** use Python 3.12 (matches CI). Python 3.14 may fail to build PyYAML 6.0.2.
+
+```powershell
+cd "C:\Users\Vedant Mayekar\devops-dashboard\devops-dashboard"
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements-dev.txt
+python -m pytest -v
+python -m ruff check .
+python -m compileall -q .
+```
+
+**Bash tests:** `bash` on PATH may be the broken WSL launcher (`execvpe(/bin/bash) failed`).
+The tests locate Git Bash automatically (`C:\Program Files\Git\bin\bash.exe`), verify it starts,
+and skip only the Bash tests, with a clear reason, if none is usable.

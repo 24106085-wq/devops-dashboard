@@ -75,6 +75,24 @@
   .sys{list-style:none;margin:0;padding:0}
   .sys li{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--line)}
   .sys li:last-child{border-bottom:0}.sys .k{color:var(--muted)}.sys .val{display:flex;align-items:center;gap:8px;font-weight:500;text-align:right}
+  /* pipeline monitor */
+  .down{background:rgba(248,113,113,.12);color:var(--bad);border-color:rgba(248,113,113,.35)}
+  .sec{display:flex;align-items:baseline;gap:10px;margin:20px 0 10px;font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+  .sec small{font-size:12px;font-weight:500;letter-spacing:0;text-transform:none}
+  .pbanner{margin-bottom:14px;padding:10px 14px;border-radius:10px;border:1px solid var(--line);display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+  .pbanner[hidden]{display:none}
+  .pbanner.bad{border-color:rgba(248,113,113,.4);background:rgba(248,113,113,.1);color:#fecaca}
+  .pbanner.warn{border-color:rgba(251,191,36,.4);background:rgba(251,191,36,.1);color:#fde68a}
+  .pbanner.info{background:var(--panel);color:var(--muted)}
+  .card.k-warn .v{color:var(--warn)}
+  .s-progress{background:rgba(251,191,36,.14);color:var(--warn)}.s-queued{background:rgba(96,165,250,.14);color:#60A5FA}
+  .latest .lt{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:15px}
+  .latest .sub,.subtle{color:var(--muted);font-size:12.5px;margin-top:3px}.subtle{margin-top:0}
+  .latest a{display:inline-block;margin-top:8px}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px}
+  .fl{display:inline-flex;align-items:center;gap:6px;color:var(--muted);font-size:12px}
+  select{background:var(--panel);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:6px 8px;font:inherit}
+  a.btn{display:inline-block;text-decoration:none}a.btn[hidden]{display:none}
   /* kanban */
   .kh{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:16px}
   .kh p{margin:2px 0 0;color:var(--muted);font-size:13px}.kh h2{font-size:18px}
@@ -134,7 +152,7 @@
     <div>DevOps Dashboard<small>DevOps Pipeline &amp; Kanban Dashboard</small></div></div>
   <div class="meta">
     <span id="repoWrap">Repository: <a id="repoLink" target="_blank" rel="noopener" hidden></a><span id="repoNone">not configured</span></span>
-    <span id="src" class="pill demo">Loading…</span>
+    <span id="src" class="pill">Loading…</span>
   </div>
   <div class="sp"></div>
   <div class="meta">
@@ -153,17 +171,43 @@
 
     <section class="view" id="view-command" aria-labelledby="t-command">
       <div class="ph"><h2 id="t-command">Command Center</h2></div>
+      <div class="pbanner" id="pbanner" role="status" hidden><span id="pbannerText"></span><button class="btn" id="pbannerRetry" type="button" hidden>Retry</button></div>
+
+      <h3 class="sec">Pipeline <small id="pstate"></small></h3>
       <div class="cards">
-        <div class="card"><div class="l">Total Pipeline Runs</div><div class="v" id="c-runs">–</div><div class="h" id="h-runs"></div></div>
-        <div class="card k-ok"><div class="l">Build Success Rate</div><div class="v" id="c-rate">–</div><div class="h">of completed runs</div></div>
-        <div class="card k-bad"><div class="l">Failed Builds</div><div class="v" id="c-failed">–</div><div class="h">completed with failure</div></div>
-        <div class="card"><div class="l">Open Tasks</div><div class="v" id="c-open">–</div><div class="h" id="h-open"></div></div>
+        <div class="card"><div class="l">Runs in window</div><div class="v" id="c-runs">–</div><div class="h" id="h-runs"></div></div>
+        <div class="card k-ok"><div class="l">Success rate</div><div class="v" id="c-rate">–</div><div class="h" id="h-rate"></div></div>
+        <div class="card k-ok"><div class="l">Successful</div><div class="v" id="c-success">–</div></div>
+        <div class="card k-bad"><div class="l">Failed</div><div class="v" id="c-failed">–</div><div class="h">failure or timed out</div></div>
+        <div class="card k-warn"><div class="l">In progress</div><div class="v" id="c-inprog">–</div><div class="h" id="h-inprog"></div></div>
       </div>
 
       <div class="panel">
-        <div class="ph"><h2>CI/CD pipeline runs (GitHub Actions)</h2><span id="runsNote"></span></div>
-        <div class="tw"><table><thead><tr><th>Run</th><th>Branch</th><th>Status</th><th>Duration</th><th>Started</th><th>Link</th></tr></thead>
-        <tbody id="runs"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody></table></div>
+        <div class="ph"><h2>Latest workflow run</h2><span id="latestNote"></span></div>
+        <div class="latest" id="latest"><div class="empty">Loading…</div></div>
+      </div>
+
+      <div class="panel">
+        <div class="ph"><h2>Workflow runs (GitHub Actions)</h2>
+          <div class="tools">
+            <label class="fl">Status <select id="fStatus"><option value="">All</option><option value="success">Success</option><option value="failure">Failed</option><option value="in_progress">In progress</option><option value="queued">Queued</option><option value="cancelled">Cancelled</option><option value="skipped">Skipped</option></select></label>
+            <label class="fl">Branch <select id="fBranch"><option value="">All branches</option></select></label>
+            <label class="fl">Show <select id="fSize"><option value="10">10</option><option value="20" selected>20</option><option value="50">50</option></select></label>
+            <button class="btn" id="pRefresh" type="button">Refresh pipeline</button>
+            <a class="btn" id="ghLink" target="_blank" rel="noopener" hidden>Open on GitHub ↗</a>
+          </div>
+        </div>
+        <div class="tw"><table><thead><tr><th>Run</th><th>Branch</th><th>Commit</th><th>Status</th><th>Duration</th><th>Started</th><th>Link</th></tr></thead>
+        <tbody id="runs"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody></table></div>
+        <div class="cap" id="runsNote"></div>
+      </div>
+
+      <h3 class="sec">Tasks <small>separate from pipeline statistics</small></h3>
+      <div class="cards">
+        <div class="card"><div class="l">Open tasks</div><div class="v" id="c-open">–</div><div class="h" id="h-open"></div></div>
+        <div class="card"><div class="l">To do</div><div class="v" id="c-todo">–</div></div>
+        <div class="card"><div class="l">In progress</div><div class="v" id="c-tinprog">–</div></div>
+        <div class="card k-ok"><div class="l">Done</div><div class="v" id="c-done">–</div></div>
       </div>
 
       <div class="grid2">
@@ -178,7 +222,7 @@
         <div class="panel">
           <div class="ph"><h2>System status</h2></div>
           <ul class="sys" id="sys"></ul>
-          <div class="cap">Container-level health is not shown: the app does not (and should not) access the Docker socket.</div>
+          <div class="cap">Only data this app can verify is shown. CPU, memory and container metrics are not displayed because no real source for them is implemented.</div>
         </div>
       </div>
     </section>
@@ -218,6 +262,7 @@
     <div id="toasts" role="status" aria-live="polite"></div>
   </main>
 </div>
+<script src="{{ url_for('static', filename='pipeline.js') }}"></script>
 <script>
 const COLS=[["todo","To Do"],["inprogress","In Progress"],["done","Done"]];
 const $=id=>document.getElementById(id);
@@ -230,8 +275,6 @@ async function api(path,opts){
 function el(tag,cls,text){const e=document.createElement(tag);if(cls)e.className=cls;if(text!==undefined)e.textContent=text;return e;}
 function setErr(k,msg){if(msg)errors[k]=msg;else delete errors[k];const b=$("err"),v=Object.values(errors);b.textContent=v.join(" · ");b.classList.toggle("show",v.length>0);}
 function fmtDur(s){if(s==null)return "–";if(s<60)return s+"s";return Math.floor(s/60)+"m "+(s%60)+"s";}
-function resOf(r){return String(r.status==="completed"?(r.conclusion||"done"):(r.status||"unknown"));}
-function cls(res){return res==="success"?"s-success":res==="failure"?"s-failure":"s-other";}
 
 async function loadHealth(){
   try{const h=await api("/health");const ok=h.status==="ok";
@@ -241,68 +284,11 @@ async function loadHealth(){
 async function loadSummary(){
   try{
     const s=await api("/api/summary");
-    $("c-runs").textContent=s.total_runs;
-    $("c-rate").textContent=s.success_rate+"%";
-    if(s.failed_builds!==undefined)$("c-failed").textContent=s.failed_builds;
-    const open=s.tasks_todo+s.tasks_inprogress;
-    $("c-open").textContent=open;
+    $("c-open").textContent=s.tasks_todo+s.tasks_inprogress;
     $("h-open").textContent=s.tasks_todo+" to do · "+s.tasks_inprogress+" in progress";
-    $("h-runs").textContent=s.source==="live"?"from GitHub Actions":"demo data";
+    $("c-todo").textContent=s.tasks_todo;$("c-tinprog").textContent=s.tasks_inprogress;$("c-done").textContent=s.tasks_done;
     setErr("summary");return s;
   }catch(e){setErr("summary","Summary unavailable: "+e.message);return null;}
-}
-let lastPipe=null;
-async function loadPipeline(){
-  try{
-    const p=await api("/api/pipeline");lastPipe=p;
-    const live=p.source==="live";
-    const b=$("src");b.textContent=live?"Live · GitHub data":"Demo data";b.className="pill "+(live?"live":"demo");
-    const link=$("repoLink");
-    if(p.repo){link.textContent=p.repo;link.href="https://github.com/"+p.repo;link.hidden=false;$("repoNone").hidden=true;}
-    else{link.hidden=true;$("repoNone").hidden=false;$("repoNone").textContent="not configured (set GITHUB_REPO for live runs)";}
-    $("runsNote").textContent=live?"Live data":"Demo data – not real pipeline runs";
-    renderRuns(p);renderAnalytics(p);
-    // fallback if summary lacks failed_builds
-    if($("c-failed").textContent==="–")$("c-failed").textContent=p.runs.filter(r=>r.status==="completed"&&r.conclusion==="failure").length;
-    setErr("pipeline");
-  }catch(e){
-    setErr("pipeline","Pipeline data unavailable: "+e.message);
-    $("runs").replaceChildren();const tr=el("tr"),td=el("td","empty","Could not load pipeline runs.");td.colSpan=6;tr.appendChild(td);$("runs").appendChild(tr);
-  }
-}
-function renderRuns(p){
-  const tb=$("runs");tb.replaceChildren();
-  if(!p.runs.length){const tr=el("tr"),td=el("td","empty","No pipeline runs found.");td.colSpan=6;tr.appendChild(td);tb.appendChild(tr);return;}
-  p.runs.forEach(r=>{
-    const tr=el("tr");
-    tr.appendChild(el("td","name",r.name||"(no title)"));
-    tr.appendChild(el("td",null,r.branch||"–"));
-    const res=resOf(r),st=el("td");st.appendChild(el("span","st "+cls(res),res.replace("_"," ")));tr.appendChild(st);
-    tr.appendChild(el("td",null,fmtDur(r.duration)));
-    const dt=r.created?new Date(r.created):null;tr.appendChild(el("td",null,dt&&!isNaN(dt)?dt.toLocaleString():"–"));
-    const lk=el("td");
-    if(typeof r.url==="string"&&r.url.startsWith("https://")){const a=el("a",null,"View run ↗");a.href=r.url;a.target="_blank";a.rel="noopener";a.setAttribute("aria-label","View run on GitHub: "+(r.name||r.id));lk.appendChild(a);}
-    else lk.appendChild(el("span",null,p.source==="demo"?"demo":"–"));
-    tr.appendChild(lk);tb.appendChild(tr);
-  });
-}
-function renderAnalytics(p){
-  const runs=p.runs;$("anNote").textContent=p.source==="live"?"Live data":"Demo data";
-  const n={success:0,failure:0,other:0};
-  runs.forEach(r=>{const x=resOf(r);n[x==="success"?"success":x==="failure"?"failure":"other"]++;});
-  const sb=$("sbar"),lg=$("legend");sb.replaceChildren();lg.replaceChildren();
-  const defs=[["success","Success","var(--ok)"],["failure","Failed","var(--bad)"],["other","Other / running","var(--muted)"]];
-  defs.forEach(([k,l,c])=>{
-    if(n[k]){const i=el("i");i.style.width=(100*n[k]/runs.length)+"%";i.style.background=c;sb.appendChild(i);}
-    const s=el("span");const sw=el("span","sw");sw.style.background=c;s.appendChild(sw);s.appendChild(document.createTextNode(l+" "));s.appendChild(el("b",null,String(n[k])));lg.appendChild(s);
-  });
-  sb.setAttribute("aria-label","Success "+n.success+", failed "+n.failure+", other "+n.other);
-  const d=$("dur");d.replaceChildren();
-  const timed=runs.filter(r=>r.duration!=null).slice().reverse();
-  const max=Math.max(1,...timed.map(r=>r.duration));
-  timed.forEach(r=>{const res=resOf(r);const b=el("div",res==="failure"?"f":res==="success"?"":"o");b.style.height=Math.max(6,100*r.duration/max)+"%";b.title=(r.name||"run")+": "+fmtDur(r.duration)+" ("+res+")";d.appendChild(b);});
-  if(timed.length){const avg=Math.round(timed.reduce((a,r)=>a+r.duration,0)/timed.length);$("durCap").textContent="Average "+fmtDur(avg)+" · longest "+fmtDur(max)+" · "+timed.length+" runs";}
-  else $("durCap").textContent="No duration data available.";
 }
 function renderSys(ok,s,tasksOk){
   const ul=$("sys");ul.replaceChildren();
@@ -310,12 +296,14 @@ function renderSys(ok,s,tasksOk){
   add("Flask API (/health)",ok?"Healthy":"Unreachable",ok?"ok":"bad");
   add("Task database (/api/tasks)",tasksOk?"Reachable":"Error",tasksOk?"ok":"bad");
   if(lastPipe){
-    add("Data source",lastPipe.source==="live"?"GitHub Actions (live)":"Demo data",lastPipe.source==="live"?"ok":"");
+    const src=lastPipe.source;
+    add("Pipeline data source",src==="live"?"GitHub Actions (live)":src==="demo"?"Demo data (explicit)":"Unavailable",src==="live"?"ok":src==="unavailable"?"bad":"");
     add("Repository",lastPipe.repo||"Not configured","");
-    const run=lastPipe.runs.find(r=>r.status==="completed");
-    if(run)add("Latest completed run",resOf(run),resOf(run)==="success"?"ok":resOf(run)==="failure"?"bad":"");
-    const act=lastPipe.runs.filter(r=>r.status!=="completed").length;
-    add("Runs in progress / queued",String(act),"");
+    if(src!=="unavailable"&&lastPipe.stats){
+      const st=lastPipe.stats;
+      if(st.current_status)add("Latest run",(STATE_LABEL[st.current_status]||st.current_status),st.current_status==="success"?"ok":st.current_status==="failure"?"bad":"");
+      add("Runs in progress / queued",st.in_progress+" / "+st.queued,"");
+    }
   }
 }
 let tasksOk=true,allTasks=[],loaded=false,busy=false,query="",pendingDel=null;
@@ -381,9 +369,11 @@ $("addForm").onsubmit=async e=>{
 $("kRefresh").onclick=async()=>{const b=$("kRefresh");if(b.disabled)return;b.disabled=true;b.textContent="Refreshing…";await refreshTasks();b.disabled=false;b.textContent="Refresh tasks";if(tasksOk)toast("Tasks refreshed");};
 $("q").oninput=e=>{query=e.target.value;renderBoard();};
 async function refreshTasks(){await Promise.all([loadSummary(),loadBoard()]);renderSys(!$("hdot").classList.contains("bad"),null,tasksOk);}
-async function refreshAll(){
+async function refreshAll(force){
   const btn=$("refreshBtn");btn.disabled=true;btn.textContent="Refreshing…";
-  const [ok]=await Promise.all([loadHealth(),loadSummary(),loadPipeline(),loadBoard()]);
+  const health=loadHealth(),board=loadBoard();
+  await loadPipeline(!!force); // first, so /api/summary below is answered from the backend cache
+  const [ok]=await Promise.all([health,loadSummary(),board]);
   renderSys(ok,null,tasksOk);
   $("last").textContent=new Date().toLocaleTimeString();$("last").dateTime=new Date().toISOString();
   btn.disabled=false;btn.textContent="Refresh";
@@ -394,9 +384,10 @@ function show(view){
   if(location.hash!=="#"+view)history.replaceState(null,"","#"+view);
 }
 document.querySelectorAll(".nav").forEach(n=>n.onclick=()=>show(n.dataset.view));
-$("refreshBtn").onclick=refreshAll;
+$("refreshBtn").onclick=()=>refreshAll(true);
 show(location.hash==="#kanban"?"kanban":"command");
-refreshAll();setInterval(refreshAll,60000);
+initPipelineControls();
+refreshAll(false);setInterval(()=>refreshAll(false),60000);
 </script>
 </body>
 </html>

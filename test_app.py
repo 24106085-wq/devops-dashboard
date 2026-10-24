@@ -55,8 +55,9 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(self.client.delete("/api/tasks/%d" % tid).status_code, 204)
         self.assertEqual(self.client.get("/api/tasks").get_json(), [])
 
-    def test_pipeline_demo_when_no_repo(self):
-        with mock.patch.dict(os.environ, {"GITHUB_REPO": ""}):
+    def test_pipeline_demo_when_demo_mode_enabled(self):
+        # Demo data is now opt-in (DEMO_MODE=true); it is never a silent fallback.
+        with mock.patch.dict(os.environ, {"GITHUB_REPO": "", "DEMO_MODE": "true"}):
             data = self.client.get("/api/pipeline").get_json()
         self.assertEqual(data["source"], "demo")
         self.assertTrue(len(data["runs"]) > 0)
@@ -69,17 +70,19 @@ class DashboardTests(unittest.TestCase):
             data = self.client.get("/api/pipeline").get_json()
         self.assertEqual(data["source"], "live")
 
-    def test_pipeline_falls_back_if_github_fails(self):
-        with mock.patch.dict(os.environ, {"GITHUB_REPO": "a/b"}), \
+    def test_pipeline_unavailable_if_github_fails(self):
+        # Previously fell back to demo data silently; now reported as unavailable.
+        with mock.patch.dict(os.environ, {"GITHUB_REPO": "a/b", "DEMO_MODE": ""}), \
              mock.patch.object(app_module, "fetch_github_runs", return_value=None):
             data = self.client.get("/api/pipeline").get_json()
-        self.assertEqual(data["source"], "demo")
+        self.assertEqual(data["source"], "unavailable")
+        self.assertEqual(data["runs"], [])
 
     def test_summary_counts(self):
         self.client.post("/api/tasks", json={"title": "A"})
         tid = self.client.post("/api/tasks", json={"title": "B"}).get_json()["id"]
         self.client.patch("/api/tasks/%d" % tid, json={"status": "done"})
-        with mock.patch.dict(os.environ, {"GITHUB_REPO": ""}):
+        with mock.patch.dict(os.environ, {"GITHUB_REPO": "", "DEMO_MODE": "true"}):
             s = self.client.get("/api/summary").get_json()
         self.assertEqual(s["tasks_todo"], 1)
         self.assertEqual(s["tasks_done"], 1)
@@ -87,9 +90,12 @@ class DashboardTests(unittest.TestCase):
 
     def test_summary_failed_builds_from_pipeline_data(self):
         fake = [
-            {"id": 1, "name": "a", "branch": "main", "status": "completed", "conclusion": "failure", "duration": 5, "url": None, "created": None},
-            {"id": 2, "name": "b", "branch": "main", "status": "completed", "conclusion": "success", "duration": 5, "url": None, "created": None},
-            {"id": 3, "name": "c", "branch": None, "status": None, "conclusion": None, "duration": None, "url": None, "created": None},
+            {"id": 1, "name": "a", "branch": "main", "status": "completed", "conclusion": "failure",
+             "duration": 5, "url": None, "created": None},
+            {"id": 2, "name": "b", "branch": "main", "status": "completed", "conclusion": "success",
+             "duration": 5, "url": None, "created": None},
+            {"id": 3, "name": "c", "branch": None, "status": None, "conclusion": None,
+             "duration": None, "url": None, "created": None},
         ]
         with mock.patch.dict(os.environ, {"GITHUB_REPO": "a/b"}), \
              mock.patch.object(app_module, "fetch_github_runs", return_value=fake):
