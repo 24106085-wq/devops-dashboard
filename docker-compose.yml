@@ -1,0 +1,15 @@
+services:
+  dashboard:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      # set to your repo (owner/name) to show live GitHub Actions runs, e.g. 24106085-wq/devops-dashboard
+      GITHUB_REPO: ${GITHUB_REPO:-}
+      DB_PATH: /data/dashboard.db
+    volumes:
+      - dashboard-data:/data
+    restart: unless-stopped
+
+volumes:
+  dashboard-data:

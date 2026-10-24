@@ -1,0 +1,8 @@
+.git
+.github
+__pycache__
+*.pyc
+*.db
+test_app.py
+README.md
+STEPS.md
