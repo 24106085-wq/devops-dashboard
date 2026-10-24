@@ -1,4 +1,4 @@
-puname: DevOps Dashboard CI/CD
+﻿name: DevOps Dashboard CI/CD
 
 on:
   push:
@@ -314,3 +314,4 @@ jobs:
             echo "The image was published to GHCR, but **no server was updated**."
             echo "See README.md, section \"Optional persistent deployment\"."
           } >> "$GITHUB_STEP_SUMMARY"
+
