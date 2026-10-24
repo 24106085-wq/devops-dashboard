@@ -1,4 +1,4 @@
-name: DevOps Dashboard CI/CD
+puname: DevOps Dashboard CI/CD
 
 on:
   push:
@@ -216,7 +216,7 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: read
-      packages: read
+      packages: write
     env:
       IMAGE_REF: ${{ needs.publish.outputs.image }}
       DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
