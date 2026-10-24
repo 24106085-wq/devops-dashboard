@@ -1,4 +1,4 @@
-﻿name: DevOps Dashboard CI/CD
+name: DevOps Dashboard CI/CD
 
 on:
   push:
@@ -216,7 +216,6 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: read
-      packages: write
     env:
       IMAGE_REF: ${{ needs.publish.outputs.image }}
       DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
@@ -314,4 +313,3 @@ jobs:
             echo "The image was published to GHCR, but **no server was updated**."
             echo "See README.md, section \"Optional persistent deployment\"."
           } >> "$GITHUB_STEP_SUMMARY"
-
